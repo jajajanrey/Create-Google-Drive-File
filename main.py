@@ -10,7 +10,7 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 def give_permissions_to_file(service, file_id, email_list, domain_list):
     permissions = None
 
-    if domain_list and isinstance(list, domain_list):
+    if domain_list and isinstance(domain_list, list):
         permissions = {
             'type': 'domain',
             'role': 'writer',
@@ -28,7 +28,7 @@ def give_permissions_to_file(service, file_id, email_list, domain_list):
 
             req.execute()
 
-    if email_list and isinstance(list, email_list):
+    if email_list and isinstance(email_list, list):
         permissions = {
             'type': 'user',
             'role': 'writer',
@@ -53,12 +53,17 @@ def main(title, folder_id, mime_type, domain_list, email_list, service_account_j
     # gcs library only accepts a file path.
     # Rewrite. Must not use /tmp because it is re-used
 
-    credentials_path = '/tmp/credentials.json'
+    credentials_path = './tmp/credentials.json'
     with open(credentials_path, "w") as credentials_file:
         credentials_file.write(service_account_json)
 
+    credentials_file.close()
     credentials = ServiceAccountCredentials.from_json_keyfile_name(
         credentials_path, SCOPES)
+
+    email_list = json.loads(email_list)
+    domain_list = json.loads(domain_list)
+
 
     service = build('drive', 'v3', credentials=credentials)
 
