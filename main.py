@@ -53,7 +53,7 @@ def main(title, folder_id, mime_type, domain_list, email_list, service_account_j
     # gcs library only accepts a file path.
     # Rewrite. Must not use /tmp because it is re-used
 
-    credentials_path = 'credentials.json'
+    credentials_path = '/tmp/credentials.json'
     with open(credentials_path, "w") as credentials_file:
         credentials_file.write(service_account_json)
 
