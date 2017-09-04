@@ -1,12 +1,13 @@
 """ Import required libraries """
 import os
 import json
+import tempfile
 
 from google.oauth2 import service_account
 from apiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
-CREDENTIALS_PATH = '/tmp/credentials.json'
+CREDENTIALS_FILENAME = 'credentials.json'
 
 
 def give_permissions_to_file(service, file_id, email_list, domain_list):
@@ -110,7 +111,5 @@ def main(title, folder_id, mime_type, service_account_json, domain_list=[], emai
         file_id=file.get("id"),
         domain_list=domain_list,
         email_list=email_list)
-
-    os.remove(CREDENTIALS_PATH)
 
     return file
