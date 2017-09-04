@@ -10,7 +10,7 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 CREDENTIALS_PATH = '/tmp/credentials.json'
 
 
-def give_permissions_to_file(service, file_id, email_list, domain_list):
+def give_permissions_to_file(service, file_id, email_list=[], domain_list=[]):
     """
         Give permission to list of domain, or to list of email
     """
