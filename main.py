@@ -5,7 +5,7 @@ from google.oauth2 import service_account
 from apiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
-CREDENTIALS_PATH = './tmp/credentials.json'
+CREDENTIALS_PATH = '/tmp/credentials.json'
 
 
 def give_permissions_to_file(service, file_id, email_list, domain_list):
