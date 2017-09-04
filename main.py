@@ -5,7 +5,7 @@ from google.oauth2 import service_account
 from apiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
-CREDENTIALS_PATH = '/tmp/credentials.json'
+CREDENTIALS_PATH = './tmp/credentials.json'
 
 
 def give_permissions_to_file(service, file_id, email_list, domain_list):
@@ -55,20 +55,24 @@ def get_credentials(credentials):
         We have to write it to a file because gcs
         library only accepts a file path.
     """
-    with open(credentials_path, "w") as credentials_file:
-        credentials_file.write(credentials)
+
+    with open(CREDENTIALS_PATH, "w") as credentials_file:
+        credentials_file.write(json.loads(credentials))
 
     return service_account.Credentials.from_service_account_file(
-        CREDENTIALS_PATH, SCOPES)
+        CREDENTIALS_PATH)
 
 
-def main(title, folder_id, mime_type, domain_list, email_list, service_account_json):
+def main(title, folder_id, mime_type, service_account_json, domain_list=[], email_list=[]):
     """ Create a google spreadsheet """
 
     credentials = get_credentials(service_account_json)
 
-    email_list = json.loads(email_list)
-    domain_list = json.loads(domain_list)
+    if email_list:
+        email_list = json.loads(email_list)
+
+    if domain_list:
+        domain_list = json.loads(domain_list)
 
     service = build('drive', 'v3', credentials=credentials)
 
