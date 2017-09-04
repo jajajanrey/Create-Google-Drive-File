@@ -11,49 +11,33 @@ from pyasn1 import error
 __all__ = ['encode']
 
 
-class BitStringEncoder(encoder.BitStringEncoder):
-    def encodeValue(self, encodeFun, value, defMode, maxChunkSize, ifNotEmpty=False):
-        return encoder.BitStringEncoder.encodeValue(
-            self, encodeFun, value, defMode, 0, ifNotEmpty=ifNotEmpty
-        )
-
-class OctetStringEncoder(encoder.OctetStringEncoder):
-    def encodeValue(self, encodeFun, value, defMode, maxChunkSize, ifNotEmpty=False):
-        return encoder.OctetStringEncoder.encodeValue(
-            self, encodeFun, value, defMode, 0, ifNotEmpty=ifNotEmpty
-        )
-
 class SetOfEncoder(encoder.SetOfEncoder):
     @staticmethod
-    def _sortComponents(components):
-        # sort by tags depending on the actual Choice value (dynamic sort)
-        return sorted(components, key=lambda x: isinstance(x, univ.Choice) and x.getComponent().tagSet or x.tagSet)
+    def _cmpSetComponents(c1, c2):
+        tagSet1 = isinstance(c1, univ.Choice) and c1.getEffectiveTagSet() or c1.getTagSet()
+        tagSet2 = isinstance(c2, univ.Choice) and c2.getEffectiveTagSet() or c2.getTagSet()
+        return cmp(tagSet1, tagSet2)
+
 
 tagMap = encoder.tagMap.copy()
 tagMap.update({
-    univ.BitString.tagSet: BitStringEncoder(),
-    univ.OctetString.tagSet: OctetStringEncoder(),
+    # Overload CER encoders with BER ones (a bit hackerish XXX)
+    univ.BitString.tagSet: encoder.encoder.BitStringEncoder(),
+    univ.OctetString.tagSet: encoder.encoder.OctetStringEncoder(),
     # Set & SetOf have same tags
-    univ.SetOf.tagSet: SetOfEncoder()
+    univ.SetOf().tagSet: SetOfEncoder()
 })
 
-typeMap = encoder.typeMap.copy()
-typeMap.update({
-    univ.BitString.typeId: BitStringEncoder(),
-    univ.OctetString.typeId: OctetStringEncoder(),
-    # Set & SetOf have same tags
-    univ.Set.typeId: SetOfEncoder(),
-    univ.SetOf.typeId: SetOfEncoder()
-})
+typeMap = encoder.typeMap
 
 
 class Encoder(encoder.Encoder):
     supportIndefLength = False
 
-    def __call__(self, value, defMode=True, maxChunkSize=0, ifNotEmpty=False):
-        if not defMode:
+    def __call__(self, client, defMode=True, maxChunkSize=0):
+        if not defMode or maxChunkSize:
             raise error.PyAsn1Error('DER forbids indefinite length mode')
-        return encoder.Encoder.__call__(self, value, defMode, maxChunkSize, ifNotEmpty=ifNotEmpty)
+        return encoder.Encoder.__call__(self, client, defMode, maxChunkSize)
 
 #: Turns ASN.1 object into DER octet stream.
 #:

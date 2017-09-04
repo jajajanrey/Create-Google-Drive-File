@@ -5,26 +5,13 @@
 # License: http://pyasn1.sf.net/license.html
 #
 import sys
-try:
-    import platform
-    implementation = platform.python_implementation()
-
-except (ImportError, AttributeError):
-    implementation = 'CPython'
-
-from pyasn1.compat.octets import oct2int, null, ensureString
-
-if sys.version_info[0:2] < (3, 2) or implementation != 'CPython':
+if sys.version_info[0:2] < (3, 2):
     from binascii import a2b_hex, b2a_hex
+from pyasn1.compat.octets import oct2int, null
 
-    if sys.version_info[0] > 2:
-        long = int
-
+if sys.version_info[0:2] < (3, 2):
     def from_bytes(octets, signed=False):
-        if not octets:
-            return 0
-
-        value = long(b2a_hex(ensureString(octets)), 16)
+        value = long(b2a_hex(str(octets)), 16)
 
         if signed and oct2int(octets[0]) & 0x80:
             return value - (1 << len(octets) * 8)

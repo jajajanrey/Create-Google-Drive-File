@@ -3,11 +3,11 @@ import os
 import json
 import tempfile
 
-from google.oauth2 import service_account
+from oauth2client.service_account import ServiceAccountCredentials
 from apiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
-CREDENTIALS_FILENAME = 'credentials.json'
+CREDENTIALS_PATH = '/tmp/credentials.json'
 
 
 def give_permissions_to_file(service, file_id, email_list, domain_list):
@@ -58,38 +58,23 @@ def get_credentials(credentials):
         library only accepts a file path.
     """
 
-    tmpdir = tempfile.mkdtemp()
-    saved_umask = os.umask(0077)
+    with open(CREDENTIALS_PATH, "w") as credentials_file:
+        credentials_file.write(credentials)
 
-    _cred = None
+    credentials = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_PATH, SCOPES)
 
-    path = os.path.join(tmpdir, CREDENTIALS_FILENAME)
-
-    try:
-        with open(path, "w") as tmp:
-            tmp.write(json.loads(credentials))
-
-        _cred = service_account.Credentials.from_service_account_file(path)
-    except IOError:
-        print 'IOError'
-    else:
-        os.remove(path)
-    finally:
-        os.umask(saved_umask)
-        os.rmdir(tmpdir)
-
-    return _cred
+    return credentials
 
 
-def main(title, folder_id, mime_type, service_account_json, domain_list=[], email_list=[]):
+ def main(title, folder_id, mime_type, service_account_json, domain_list=[], email_list=[]):
     """ Create a google spreadsheet """
 
     credentials = get_credentials(service_account_json)
 
-    if email_list:
+    if len(email_list):
         email_list = json.loads(email_list)
 
-    if domain_list:
+    if len(domain_list):
         domain_list = json.loads(domain_list)
 
     service = build('drive', 'v3', credentials=credentials)
@@ -112,4 +97,5 @@ def main(title, folder_id, mime_type, service_account_json, domain_list=[], emai
         domain_list=domain_list,
         email_list=email_list)
 
+    os.remove(CREDENTIALS_PATH)
     return file

@@ -27,14 +27,7 @@ tagMap.update(
      univ.Real.tagSet: RealDecoder()}
 )
 
-typeMap = decoder.typeMap.copy()
-
-# Put in non-ambiguous types for faster codec lookup
-for typeDecoder in tagMap.values():
-    if typeDecoder.protoComponent is not None:
-        typeId = typeDecoder.protoComponent.__class__.typeId
-        if typeId is not None and typeId not in typeMap:
-            typeMap[typeId] = typeDecoder
+typeMap = decoder.typeMap
 
 
 class Decoder(decoder.Decoder):

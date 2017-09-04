@@ -7,32 +7,32 @@
 from pyasn1.type import univ
 from pyasn1.type import useful
 from pyasn1.codec.ber import encoder
-from pyasn1.compat.octets import str2octs, null
+from pyasn1.compat.octets import int2oct, str2octs, null
 from pyasn1 import error
 
 __all__ = ['encode']
 
 
 class BooleanEncoder(encoder.IntegerEncoder):
-    def encodeValue(self, encodeFun, value, defMode, maxChunkSize, ifNotEmpty=False):
-        if value == 0:
-            substrate = (0,)
+    def encodeValue(self, encodeFun, client, defMode, maxChunkSize):
+        if client == 0:
+            substrate = int2oct(0)
         else:
-            substrate = (255,)
-        return substrate, False, False
+            substrate = int2oct(255)
+        return substrate, 0
 
 
 class BitStringEncoder(encoder.BitStringEncoder):
-    def encodeValue(self, encodeFun, value, defMode, maxChunkSize, ifNotEmpty=False):
+    def encodeValue(self, encodeFun, client, defMode, maxChunkSize):
         return encoder.BitStringEncoder.encodeValue(
-            self, encodeFun, value, defMode, 1000, ifNotEmpty=ifNotEmpty
+            self, encodeFun, client, defMode, 1000
         )
 
 
 class OctetStringEncoder(encoder.OctetStringEncoder):
-    def encodeValue(self, encodeFun, value, defMode, maxChunkSize, ifNotEmpty=False):
+    def encodeValue(self, encodeFun, client, defMode, maxChunkSize):
         return encoder.OctetStringEncoder.encodeValue(
-            self, encodeFun, value, defMode, 1000, ifNotEmpty=ifNotEmpty
+            self, encodeFun, client, defMode, 1000
         )
 
 
@@ -44,133 +44,81 @@ class RealEncoder(encoder.RealEncoder):
 
 # specialized GeneralStringEncoder here
 
-class TimeEncoderMixIn(object):
-    zchar, = str2octs('Z')
-    pluschar, = str2octs('+')
-    minuschar, = str2octs('-')
-    commachar, = str2octs(',')
-    minLength = 12
-    maxLength = 19
+class GeneralizedTimeEncoder(OctetStringEncoder):
+    zchar = str2octs('Z')
+    pluschar = str2octs('+')
+    minuschar = str2octs('-')
+    zero = str2octs('0')
 
-    def encodeValue(self, encodeFun, value, defMode, maxChunkSize, ifNotEmpty=False):
-        # Encoding constraints:
-        # - minutes are mandatory, seconds are optional
-        # - subseconds must NOT be zero
-        # - no hanging fraction dot
-        # - time in UTC (Z)
-        # - only dot is allowed for fractions
-
-        octets = value.asOctets()
-
-        if not self.minLength < len(octets) < self.maxLength:
-            raise error.PyAsn1Error('Length constraint violated: %r' % value)
-
+    def encodeValue(self, encodeFun, client, defMode, maxChunkSize):
+        octets = client.asOctets()
+        # This breaks too many existing data items
+        #        if '.' not in octets:
+        #            raise error.PyAsn1Error('Format must include fraction of second: %r' % octets)
+        if len(octets) < 15:
+            raise error.PyAsn1Error('Bad UTC time length: %r' % octets)
         if self.pluschar in octets or self.minuschar in octets:
             raise error.PyAsn1Error('Must be UTC time: %r' % octets)
-
-        if octets[-1] != self.zchar:
-            raise error.PyAsn1Error('Missing "Z" time zone specifier: %r' % octets)
-
-        if self.commachar in octets:
-            raise error.PyAsn1Error('Comma in fractions disallowed: %r' % value)
-
+        if octets[-1] != self.zchar[0]:
+            raise error.PyAsn1Error('Missing timezone specifier: %r' % octets)
         return encoder.OctetStringEncoder.encodeValue(
-            self, encodeFun, value, defMode, 1000, ifNotEmpty=ifNotEmpty
+            self, encodeFun, client, defMode, 1000
         )
 
 
-class GeneralizedTimeEncoder(TimeEncoderMixIn, OctetStringEncoder):
-    minLength = 12
-    maxLength = 19
+class UTCTimeEncoder(encoder.OctetStringEncoder):
+    zchar = str2octs('Z')
+    pluschar = str2octs('+')
+    minuschar = str2octs('-')
 
-
-class UTCTimeEncoder(TimeEncoderMixIn, encoder.OctetStringEncoder):
-    minLength = 10
-    maxLength = 14
+    def encodeValue(self, encodeFun, client, defMode, maxChunkSize):
+        octets = client.asOctets()
+        if self.pluschar in octets or self.minuschar in octets:
+            raise error.PyAsn1Error('Must be UTC time: %r' % octets)
+        if octets and octets[-1] != self.zchar[0]:
+            client = client.clone(octets + self.zchar)
+        if len(client) != 13:
+            raise error.PyAsn1Error('Bad UTC time length: %r' % client)
+        return encoder.OctetStringEncoder.encodeValue(
+            self, encodeFun, client, defMode, 1000
+        )
 
 
 class SetOfEncoder(encoder.SequenceOfEncoder):
-    @staticmethod
-    def _sortComponents(components):
-        # sort by tags regardless of the Choice value (static sort)
-        return sorted(components, key=lambda x: isinstance(x, univ.Choice) and x.minTagSet or x.tagSet)
-
-    def encodeValue(self, encodeFun, value, defMode, maxChunkSize, ifNotEmpty=False):
-        value.verifySizeSpec()
+    def encodeValue(self, encodeFun, client, defMode, maxChunkSize):
+        if isinstance(client, univ.SequenceAndSetBase):
+            client.setDefaultComponents()
+        client.verifySizeSpec()
         substrate = null
-        idx = len(value)
+        idx = len(client)
         # This is certainly a hack but how else do I distinguish SetOf
         # from Set if they have the same tags&constraints?
-        if isinstance(value, univ.SequenceAndSetBase):
+        if isinstance(client, univ.SequenceAndSetBase):
             # Set
-            namedTypes = value.componentType
             comps = []
-            compsMap = {}
             while idx > 0:
                 idx -= 1
-                if namedTypes:
-                    if namedTypes[idx].isOptional and not value[idx].isValue:
-                        continue
-                    if namedTypes[idx].isDefaulted and value[idx] == namedTypes[idx].asn1Object:
-                        continue
-
-                comps.append(value[idx])
-                compsMap[id(value[idx])] = namedTypes[idx].isOptional
-
-            for comp in self._sortComponents(comps):
-                substrate += encodeFun(comp, defMode, maxChunkSize, ifNotEmpty=compsMap[id(comp)])
+                if client[idx] is None:  # Optional component
+                    continue
+                if client.getDefaultComponentByPosition(idx) == client[idx]:
+                    continue
+                comps.append(client[idx])
+            comps.sort(key=lambda x: isinstance(x, univ.Choice) and x.getMinTagSet() or x.getTagSet())
+            for c in comps:
+                substrate += encodeFun(c, defMode, maxChunkSize)
         else:
             # SetOf
-            components = [encodeFun(x, defMode, maxChunkSize) for x in value]
-
-            # sort by serialized and padded components
-            if len(components) > 1:
-                zero = str2octs('\x00')
-                maxLen = max(map(len, components))
-                paddedComponents = [
-                    (x.ljust(maxLen, zero), x) for x in components
-                ]
-                paddedComponents.sort(key=lambda x: x[0])
-
-                components = [x[1] for x in paddedComponents]
-
-            substrate = null.join(components)
-
-        return substrate, True, True
-
-
-class SequenceEncoder(encoder.SequenceEncoder):
-    def encodeValue(self, encodeFun, value, defMode, maxChunkSize, ifNotEmpty=False):
-        value.verifySizeSpec()
-        namedTypes = value.componentType
-        substrate = null
-        idx = len(value)
-        while idx > 0:
-            idx -= 1
-            if namedTypes:
-                if namedTypes[idx].isOptional and not value[idx].isValue:
-                    continue
-                if namedTypes[idx].isDefaulted and value[idx] == namedTypes[idx].asn1Object:
-                    continue
-
-            substrate = encodeFun(value[idx], defMode, maxChunkSize, namedTypes[idx].isOptional) + substrate
-
-        return substrate, True, True
-
-
-class SequenceOfEncoder(encoder.SequenceOfEncoder):
-    def encodeValue(self, encodeFun, value, defMode, maxChunkSize, ifNotEmpty=False):
-        substrate = null
-        idx = len(value)
-
-        if ifNotEmpty and not idx:
-            return substrate, True, True
-
-        value.verifySizeSpec()
-        while idx > 0:
-            idx -= 1
-            substrate = encodeFun(value[idx], defMode, maxChunkSize, ifNotEmpty=False) + substrate
-        return substrate, True, True
+            compSubs = []
+            while idx > 0:
+                idx -= 1
+                compSubs.append(
+                    encodeFun(client[idx], defMode, maxChunkSize)
+                )
+            compSubs.sort()  # perhaps padding's not needed
+            substrate = null
+            for compSub in compSubs:
+                substrate += compSub
+        return substrate, 1
 
 
 tagMap = encoder.tagMap.copy()
@@ -181,31 +129,20 @@ tagMap.update({
     univ.Real.tagSet: RealEncoder(),
     useful.GeneralizedTime.tagSet: GeneralizedTimeEncoder(),
     useful.UTCTime.tagSet: UTCTimeEncoder(),
-    # Sequence & Set have same tags as SequenceOf & SetOf
-    univ.SetOf.tagSet: SetOfEncoder(),
-    univ.Sequence.typeId: SequenceEncoder()
+    univ.SetOf().tagSet: SetOfEncoder()  # conflcts with Set
 })
 
 typeMap = encoder.typeMap.copy()
 typeMap.update({
-    univ.Boolean.typeId: BooleanEncoder(),
-    univ.BitString.typeId: BitStringEncoder(),
-    univ.OctetString.typeId: OctetStringEncoder(),
-    univ.Real.typeId: RealEncoder(),
-    useful.GeneralizedTime.typeId: GeneralizedTimeEncoder(),
-    useful.UTCTime.typeId: UTCTimeEncoder(),
-    # Sequence & Set have same tags as SequenceOf & SetOf
     univ.Set.typeId: SetOfEncoder(),
-    univ.SetOf.typeId: SetOfEncoder(),
-    univ.Sequence.typeId: SequenceEncoder(),
-    univ.SequenceOf.typeId: SequenceOfEncoder()
+    univ.SetOf.typeId: SetOfEncoder()
 })
 
 
 class Encoder(encoder.Encoder):
+    def __call__(self, client, defMode=False, maxChunkSize=0):
+        return encoder.Encoder.__call__(self, client, defMode, maxChunkSize)
 
-    def __call__(self, value, defMode=False, maxChunkSize=0, ifNotEmpty=False):
-        return encoder.Encoder.__call__(self, value, defMode, maxChunkSize, ifNotEmpty)
 
 #: Turns ASN.1 object into CER octet stream.
 #:

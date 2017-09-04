@@ -4,6 +4,7 @@
 # Copyright (c) 2005-2017, Ilya Etingof <etingof@gmail.com>
 # License: http://pyasn1.sf.net/license.html
 #
+import operator
 import sys
 import math
 from pyasn1.type import base, tag, constraint, namedtype, namedval, tagmap
@@ -20,7 +21,6 @@ __all__ = ['Integer', 'Boolean', 'BitString', 'OctetString', 'Null',
            'NoValue', 'noValue']
 
 # "Simple" ASN.1 types (yet incomplete)
-
 
 class Integer(base.AbstractSimpleAsn1Item):
     """Create |ASN.1| type or object.
@@ -46,34 +46,33 @@ class Integer(base.AbstractSimpleAsn1Item):
     : :py:class:`pyasn1.error.PyAsn1Error`
         On constraint violation or bad initializer.
     """
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for |ASN.1| objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatSimple, 0x02)
     )
+    baseTagSet = tagSet
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on initialization values.
     subtypeSpec = constraint.ConstraintsIntersection()
 
     #: Default :py:class:`~pyasn1.type.namedval.NamedValues` object
     #: representing symbolic aliases for numbers
     namedValues = namedval.NamedValues()
 
-    # Optimization for faster codec lookup
-    typeId = base.AbstractSimpleAsn1Item.getTypeId()
-
-    def __init__(self, value=noValue, **kwargs):
-        if 'namedValues' not in kwargs:
-            kwargs['namedValues'] = self.namedValues
-
-        base.AbstractSimpleAsn1Item.__init__(self, value, **kwargs)
+    def __init__(self, value=noValue, tagSet=None, subtypeSpec=None,
+                 namedValues=None):
+        if namedValues is None:
+            self.__namedValues = self.namedValues
+        else:
+            self.__namedValues = namedValues
+        base.AbstractSimpleAsn1Item.__init__(
+            self, value, tagSet, subtypeSpec
+        )
 
     def __repr__(self):
-        if self.namedValues is not self.__class__.namedValues:
-            return '%s, %r)' % (base.AbstractSimpleAsn1Item.__repr__(self)[:-1], self.namedValues)
+        if self.__namedValues is not self.namedValues:
+            return '%s, %r)' % (base.AbstractSimpleAsn1Item.__repr__(self)[:-1], self.__namedValues)
         else:
             return base.AbstractSimpleAsn1Item.__repr__(self)
 
@@ -168,8 +167,7 @@ class Integer(base.AbstractSimpleAsn1Item):
         return int(self._value)
 
     if sys.version_info[0] <= 2:
-        def __long__(self):
-            return long(self._value)
+        def __long__(self): return long(self._value)
 
     def __float__(self):
         return float(self._value)
@@ -203,8 +201,7 @@ class Integer(base.AbstractSimpleAsn1Item):
         return math.ceil(self._value)
 
     if sys.version_info[0:2] > (2, 5):
-        def __trunc__(self):
-            return self.clone(math.trunc(self._value))
+        def __trunc__(self): return self.clone(math.trunc(self._value))
 
     def __lt__(self, value):
         return self._value < value
@@ -225,26 +222,31 @@ class Integer(base.AbstractSimpleAsn1Item):
         return self._value >= value
 
     def prettyIn(self, value):
-        try:
-            return int(value)
-
-        except ValueError:
+        if not octets.isStringType(value):
             try:
-                return self.namedValues[value]
-
-            except KeyError:
+                return int(value)
+            except:
                 raise error.PyAsn1Error(
                     'Can\'t coerce %r into integer: %s' % (value, sys.exc_info()[1])
                 )
+        r = self.__namedValues.getValue(value)
+        if r is not None:
+            return r
+        try:
+            return int(value)
+        except:
+            raise error.PyAsn1Error(
+                'Can\'t coerce %r into integer: %s' % (value, sys.exc_info()[1])
+            )
 
     def prettyOut(self, value):
-        try:
-            return repr(self.namedValues[value])
+        r = self.__namedValues.getName(value)
+        return r is None and str(value) or repr(r)
 
-        except KeyError:
-            return str(value)
+    def getNamedValues(self):
+        return self.__namedValues
 
-    def clone(self, value=noValue, **kwargs):
+    def clone(self, value=noValue, tagSet=None, subtypeSpec=None, namedValues=None):
         """Create a copy of a |ASN.1| type or object.
 
         Any parameters to the *clone()* method will replace corresponding
@@ -270,9 +272,20 @@ class Integer(base.AbstractSimpleAsn1Item):
         :
             new instance of |ASN.1| type/value
         """
-        return base.AbstractSimpleAsn1Item.clone(self, value, **kwargs)
+        if self.isNoValue(value):
+            if self.isNoValue(tagSet, subtypeSpec, namedValues):
+                return self
+            value = self._value
+        if tagSet is None:
+            tagSet = self._tagSet
+        if subtypeSpec is None:
+            subtypeSpec = self._subtypeSpec
+        if namedValues is None:
+            namedValues = self.__namedValues
+        return self.__class__(value, tagSet, subtypeSpec, namedValues)
 
-    def subtype(self, value=noValue, **kwargs):
+    def subtype(self, value=noValue, implicitTag=None, explicitTag=None,
+                subtypeSpec=None, namedValues=None):
         """Create a copy of a |ASN.1| type or object.
 
         Any parameters to the *subtype()* method will be added to the corresponding
@@ -308,35 +321,41 @@ class Integer(base.AbstractSimpleAsn1Item):
         :
             new instance of |ASN.1| type/value
         """
-        return base.AbstractSimpleAsn1Item.subtype(self, value, **kwargs)
-
-    # backward compatibility
-
-    def getNamedValues(self):
-        return self.namedValues
+        if self.isNoValue(value):
+            value = self._value
+        if implicitTag is not None:
+            tagSet = self._tagSet.tagImplicitly(implicitTag)
+        elif explicitTag is not None:
+            tagSet = self._tagSet.tagExplicitly(explicitTag)
+        else:
+            tagSet = self._tagSet
+        if subtypeSpec is None:
+            subtypeSpec = self._subtypeSpec
+        else:
+            subtypeSpec = self._subtypeSpec + subtypeSpec
+        if namedValues is None:
+            namedValues = self.__namedValues
+        else:
+            namedValues = namedValues + self.__namedValues
+        return self.__class__(value, tagSet, subtypeSpec, namedValues)
 
 
 class Boolean(Integer):
     __doc__ = Integer.__doc__
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for |ASN.1| objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatSimple, 0x01),
     )
+    baseTagSet = tagSet
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on initialization values.
     subtypeSpec = Integer.subtypeSpec + constraint.SingleValueConstraint(0, 1)
 
     #: Default :py:class:`~pyasn1.type.namedval.NamedValues` object
     #: representing symbolic aliases for numbers
-    namedValues = namedval.NamedValues(('False', 0), ('True', 1))
-
-    # Optimization for faster codec lookup
-    typeId = Integer.getTypeId()
+    namedValues = Integer.namedValues.clone(('False', 0), ('True', 1))
 
 
 class BitString(base.AbstractSimpleAsn1Item):
@@ -373,24 +392,19 @@ class BitString(base.AbstractSimpleAsn1Item):
     : :py:class:`pyasn1.error.PyAsn1Error`
         On constraint violation or bad initializer.
     """
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for |ASN.1| objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatSimple, 0x03)
     )
+    baseTagSet = tagSet
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on initialization values.
     subtypeSpec = constraint.ConstraintsIntersection()
 
     #: Default :py:class:`~pyasn1.type.namedval.NamedValues` object
     #: representing symbolic aliases for numbers
     namedValues = namedval.NamedValues()
-
-    # Optimization for faster codec lookup
-    typeId = base.AbstractSimpleAsn1Item.getTypeId()
 
     defaultBinValue = defaultHexValue = noValue
 
@@ -413,34 +427,28 @@ class BitString(base.AbstractSimpleAsn1Item):
 
             return self.bitLength
 
-    def __init__(self, value=noValue, **kwargs):
-        if value is noValue or value is None:
-            if kwargs:
-                try:
-                    value = self.fromBinaryString(kwargs.pop('binValue'))
-
-                except KeyError:
-                    pass
-
-                try:
-                    value = self.fromHexString(kwargs.pop('hexValue'))
-
-                except KeyError:
-                    pass
-
-        if value is noValue or value is None:
+    def __init__(self, value=noValue, tagSet=None, subtypeSpec=None,
+                 namedValues=None, binValue=noValue, hexValue=noValue):
+        if namedValues is None:
+            self.__namedValues = self.namedValues
+        else:
+            self.__namedValues = namedValues
+        if not self.isNoValue(binValue):
+            value = self.fromBinaryString(binValue)
+        if not self.isNoValue(hexValue):
+            value = self.fromHexString(hexValue)
+        if self.isNoValue(value):
             if self.defaultBinValue is not noValue:
                 value = self.fromBinaryString(self.defaultBinValue)
-
             elif self.defaultHexValue is not noValue:
                 value = self.fromHexString(self.defaultHexValue)
+        self.__asNumbersCache = {}
+        base.AbstractSimpleAsn1Item.__init__(
+            self, value, tagSet, subtypeSpec
+        )
 
-        if 'namedValues' not in kwargs:
-            kwargs['namedValues'] = self.namedValues
-
-        base.AbstractSimpleAsn1Item.__init__(self, value, **kwargs)
-
-    def clone(self, value=noValue, **kwargs):
+    def clone(self, value=noValue, tagSet=None, subtypeSpec=None,
+              namedValues=None, binValue=noValue, hexValue=noValue):
         """Create a copy of a |ASN.1| type or object.
 
         Any parameters to the *clone()* method will replace corresponding
@@ -474,9 +482,20 @@ class BitString(base.AbstractSimpleAsn1Item):
         :
             new instance of |ASN.1| type/value
         """
-        return base.AbstractSimpleAsn1Item.clone(self, value, **kwargs)
+        if self.isNoValue(value, binValue, hexValue):
+            if self.isNoValue(tagSet, subtypeSpec, namedValues):
+                return self
+            value = self._value
+        if tagSet is None:
+            tagSet = self._tagSet
+        if subtypeSpec is None:
+            subtypeSpec = self._subtypeSpec
+        if namedValues is None:
+            namedValues = self.__namedValues
+        return self.__class__(value, tagSet, subtypeSpec, namedValues, binValue, hexValue)
 
-    def subtype(self, value=noValue, **kwargs):
+    def subtype(self, value=noValue, implicitTag=None, explicitTag=None,
+                subtypeSpec=None, namedValues=None, binValue=noValue, hexValue=noValue):
         """Create a copy of a |ASN.1| type or object.
 
         Any parameters to the *subtype()* method will be added to the corresponding
@@ -484,7 +503,7 @@ class BitString(base.AbstractSimpleAsn1Item):
 
         Parameters
         ----------
-        value: :class:`int`, :class:`str` or |ASN.1| object
+        value : :class:`int`, :class:`str` or |ASN.1| object
             Initialization value to pass to new ASN.1 object instead of
             inheriting one from the caller.
 
@@ -520,7 +539,25 @@ class BitString(base.AbstractSimpleAsn1Item):
         :
             new instance of |ASN.1| type/value
         """
-        return base.AbstractSimpleAsn1Item.subtype(self, value, **kwargs)
+        if self.isNoValue(value, binValue, hexValue):
+            if self.isNoValue(implicitTag, explicitTag, subtypeSpec, namedValues):
+                return self
+            value = self._value
+        if implicitTag is not None:
+            tagSet = self._tagSet.tagImplicitly(implicitTag)
+        elif explicitTag is not None:
+            tagSet = self._tagSet.tagExplicitly(explicitTag)
+        else:
+            tagSet = self._tagSet
+        if subtypeSpec is None:
+            subtypeSpec = self._subtypeSpec
+        else:
+            subtypeSpec = self._subtypeSpec + subtypeSpec
+        if namedValues is None:
+            namedValues = self.__namedValues
+        else:
+            namedValues = namedValues + self.__namedValues
+        return self.__class__(value, tagSet, subtypeSpec, namedValues, binValue, hexValue)
 
     def __str__(self):
         return self.asBinary()
@@ -555,7 +592,7 @@ class BitString(base.AbstractSimpleAsn1Item):
         return len(self._value)
 
     def __getitem__(self, i):
-        if i.__class__ is slice:
+        if isinstance(i, slice):
             return self.clone([self[x] for x in range(*i.indices(len(self)))])
         else:
             length = len(self._value) - 1
@@ -634,17 +671,10 @@ class BitString(base.AbstractSimpleAsn1Item):
         """Get |ASN.1| value as a text string of bits.
         """
         binString = binary.bin(self._value)[2:]
-        return '0' * (len(self._value) - len(binString)) + binString
+        return '0'*(len(self._value) - len(binString)) + binString
 
     @classmethod
     def fromHexString(cls, value):
-        """Create a |ASN.1| object initialized from the hex string.
-        
-        Parameters
-        ----------
-        value: :class:`str`
-            Text string like 'DEADBEEF'
-        """
         try:
             return cls.SizedInteger(value, 16).setBitLength(len(value) * 4)
 
@@ -653,13 +683,6 @@ class BitString(base.AbstractSimpleAsn1Item):
 
     @classmethod
     def fromBinaryString(cls, value):
-        """Create a |ASN.1| object initialized from a string of '0' and '1'.
-
-        Parameters
-        ----------
-        value: :class:`str`
-            Text string like '1010111'
-        """
         try:
             return cls.SizedInteger(value or '0', 2).setBitLength(len(value))
 
@@ -668,13 +691,6 @@ class BitString(base.AbstractSimpleAsn1Item):
 
     @classmethod
     def fromOctetString(cls, value, padding=0):
-        """Create a |ASN.1| object initialized from a string.
-
-        Parameters
-        ----------
-        value: :class:`str` (Py2) or :class:`bytes` (Py3)
-            Text string like '\\\\x01\\\\xff' (Py2) or b'\\\\x01\\\\xff' (Py3)
-        """
         return cls(cls.SizedInteger(integer.from_bytes(value) >> padding).setBitLength(len(value) * 8 - padding))
 
     def prettyIn(self, value):
@@ -692,23 +708,21 @@ class BitString(base.AbstractSimpleAsn1Item):
                         'Bad BIT STRING value notation %s' % (value,)
                     )
 
-            elif self.namedValues and not value.isdigit():  # named bits like 'Urgent, Active'
-                names = [x.strip() for x in value.split(',')]
-
-                try:
-
-                    bitPositions = [self.namedValues[name] for name in names]
-
-                except KeyError:
-                    raise error.PyAsn1Error('unknown bit name(s) in %r' % (names,))
-
-                rightmostPosition = max(bitPositions)
-
+            elif self.__namedValues and not value.isdigit():  # named bits like 'Urgent, Active'
                 number = 0
-                for bitPosition in bitPositions:
-                    number |= 1 << (rightmostPosition - bitPosition)
+                highestBitPosition = 0
+                for namedBit in value.split(','):
+                    bitPosition = self.__namedValues.getValue(namedBit)
+                    if bitPosition is None:
+                        raise error.PyAsn1Error(
+                            'Unknown bit identifier \'%s\'' % (namedBit,)
+                        )
 
-                return self.SizedInteger(number).setBitLength(rightmostPosition + 1)
+                    number |= (1 << bitPosition)
+
+                    highestBitPosition = max(highestBitPosition, bitPosition)
+
+                return self.SizedInteger(number).setBitLength(highestBitPosition + 1)
 
             elif value.startswith('0x'):
                 return self.fromHexString(value[2:])
@@ -787,52 +801,39 @@ class OctetString(base.AbstractSimpleAsn1Item):
     : :py:class:`pyasn1.error.PyAsn1Error`
         On constraint violation or bad initializer.
     """
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for |ASN.1| objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatSimple, 0x04)
     )
+    baseTagSet = tagSet
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on initialization values.
     subtypeSpec = constraint.ConstraintsIntersection()
-
-    # Optimization for faster codec lookup
-    typeId = base.AbstractSimpleAsn1Item.getTypeId()
 
     defaultBinValue = defaultHexValue = noValue
     encoding = 'iso-8859-1'
 
-    def __init__(self, value=noValue, **kwargs):
-        if kwargs:
-            if value is noValue or value is None:
-                try:
-                    value = self.fromBinaryString(kwargs.pop('binValue'))
-
-                except KeyError:
-                    pass
-
-                try:
-                    value = self.fromHexString(kwargs.pop('hexValue'))
-
-                except KeyError:
-                    pass
-
-        if value is noValue or value is None:
+    def __init__(self, value=noValue, tagSet=None, subtypeSpec=None,
+                 encoding=None, binValue=noValue, hexValue=noValue):
+        if encoding is None:
+            self._encoding = self.encoding
+        else:
+            self._encoding = encoding
+        if not self.isNoValue(binValue):
+            value = self.fromBinaryString(binValue)
+        if not self.isNoValue(hexValue):
+            value = self.fromHexString(hexValue)
+        if self.isNoValue(value):
             if self.defaultBinValue is not noValue:
                 value = self.fromBinaryString(self.defaultBinValue)
-
             elif self.defaultHexValue is not noValue:
                 value = self.fromHexString(self.defaultHexValue)
+        self.__asNumbersCache = None
+        base.AbstractSimpleAsn1Item.__init__(self, value, tagSet, subtypeSpec)
 
-        if 'encoding' not in kwargs:
-            kwargs['encoding'] = self.encoding
-
-        base.AbstractSimpleAsn1Item.__init__(self, value, **kwargs)
-
-    def clone(self, value=noValue, **kwargs):
+    def clone(self, value=noValue, tagSet=None, subtypeSpec=None,
+              encoding=None, binValue=noValue, hexValue=noValue):
         """Create a copy of a |ASN.1| type or object.
 
         Any parameters to the *clone()* method will replace corresponding
@@ -866,9 +867,23 @@ class OctetString(base.AbstractSimpleAsn1Item):
         :
             new instance of |ASN.1| type/value
         """
-        return base.AbstractSimpleAsn1Item.clone(self, value, **kwargs)
+        if self.isNoValue(value, binValue, hexValue):
+            if self.isNoValue(tagSet, subtypeSpec, encoding):
+                return self
+            value = self._value
+        if tagSet is None:
+            tagSet = self._tagSet
+        if subtypeSpec is None:
+            subtypeSpec = self._subtypeSpec
+        if encoding is None:
+            encoding = self._encoding
+        return self.__class__(
+            value, tagSet, subtypeSpec, encoding, binValue, hexValue
+        )
 
-    def subtype(self, value=noValue, **kwargs):
+    def subtype(self, value=noValue, implicitTag=None, explicitTag=None,
+                subtypeSpec=None, encoding=None, binValue=noValue,
+                hexValue=noValue):
         """Create a copy of a |ASN.1| type or object.
 
         Any parameters to the *subtype()* method will be added to the corresponding
@@ -910,7 +925,25 @@ class OctetString(base.AbstractSimpleAsn1Item):
         :
              new instance of |ASN.1| type/value
         """
-        return base.AbstractSimpleAsn1Item.subtype(self, value, **kwargs)
+        if self.isNoValue(value, binValue, hexValue):
+            if self.isNoValue(implicitTag, explicitTag, subtypeSpec, encoding):
+                return self
+            value = self._value
+        if implicitTag is not None:
+            tagSet = self._tagSet.tagImplicitly(implicitTag)
+        elif explicitTag is not None:
+            tagSet = self._tagSet.tagExplicitly(explicitTag)
+        else:
+            tagSet = self._tagSet
+        if subtypeSpec is None:
+            subtypeSpec = self._subtypeSpec
+        else:
+            subtypeSpec = self._subtypeSpec + subtypeSpec
+        if encoding is None:
+            encoding = self._encoding
+        return self.__class__(
+            value, tagSet, subtypeSpec, encoding, binValue, hexValue
+        )
 
     if sys.version_info[0] <= 2:
         def prettyIn(self, value):
@@ -918,10 +951,10 @@ class OctetString(base.AbstractSimpleAsn1Item):
                 return value
             elif isinstance(value, unicode):
                 try:
-                    return value.encode(self.encoding)
+                    return value.encode(self._encoding)
                 except (LookupError, UnicodeEncodeError):
                     raise error.PyAsn1Error(
-                        'Can\'t encode string \'%s\' with \'%s\' codec' % (value, self.encoding)
+                        'Can\'t encode string \'%s\' with \'%s\' codec' % (value, self._encoding)
                     )
             elif isinstance(value, (tuple, list)):
                 try:
@@ -938,18 +971,20 @@ class OctetString(base.AbstractSimpleAsn1Item):
 
         def __unicode__(self):
             try:
-                return self._value.decode(self.encoding)
+                return self._value.decode(self._encoding)
 
             except UnicodeDecodeError:
                 raise error.PyAsn1Error(
-                    'Can\'t decode string \'%s\' with \'%s\' codec' % (self._value, self.encoding)
+                    'Can\'t decode string \'%s\' with \'%s\' codec' % (self._value, self._encoding)
                 )
 
         def asOctets(self):
             return str(self._value)
 
         def asNumbers(self):
-            return tuple([ord(x) for x in self._value])
+            if self.__asNumbersCache is None:
+                self.__asNumbersCache = tuple([ord(x) for x in self._value])
+            return self.__asNumbersCache
 
     else:
         def prettyIn(self, value):
@@ -957,10 +992,10 @@ class OctetString(base.AbstractSimpleAsn1Item):
                 return value
             elif isinstance(value, str):
                 try:
-                    return value.encode(self.encoding)
+                    return value.encode(self._encoding)
                 except UnicodeEncodeError:
                     raise error.PyAsn1Error(
-                        'Can\'t encode string \'%s\' with \'%s\' codec' % (value, self.encoding)
+                        'Can\'t encode string \'%s\' with \'%s\' codec' % (value, self._encoding)
                     )
             elif isinstance(value, OctetString):  # a shortcut, bytes() would work the same way
                 return value.asOctets()
@@ -973,11 +1008,11 @@ class OctetString(base.AbstractSimpleAsn1Item):
 
         def __str__(self):
             try:
-                return self._value.decode(self.encoding)
+                return self._value.decode(self._encoding)
 
             except UnicodeDecodeError:
                 raise error.PyAsn1Error(
-                    'Can\'t decode string \'%s\' with \'%s\' codec at \'%s\'' % (self._value, self.encoding, self.__class__.__name__)
+                    'Can\'t decode string \'%s\' with \'%s\' codec at \'%s\'' % (self._value, self._encoding, self.__class__.__name__)
                 )
 
         def __bytes__(self):
@@ -987,7 +1022,9 @@ class OctetString(base.AbstractSimpleAsn1Item):
             return bytes(self._value)
 
         def asNumbers(self):
-            return tuple(self._value)
+            if self.__asNumbersCache is None:
+                self.__asNumbersCache = tuple(self._value)
+            return self.__asNumbersCache
 
     def prettyOut(self, value):
         if sys.version_info[0] <= 2:
@@ -998,23 +1035,10 @@ class OctetString(base.AbstractSimpleAsn1Item):
             if x < 32 or x > 126:
                 return '0x' + ''.join(('%.2x' % x for x in numbers))
         else:
-            try:
-                return value.decode(self.encoding)
-
-            except UnicodeDecodeError:
-                raise error.PyAsn1Error(
-                    "Can't decode string '%s' with '%s' codec at '%s'" % (value, self.encoding, self.__class__.__name__)
-                )
+            return octets.octs2str(value)
 
     @staticmethod
     def fromBinaryString(value):
-        """Create a |ASN.1| object initialized from a string of '0' and '1'.
-
-        Parameters
-        ----------
-        value: :class:`str`
-            Text string like '1010111'
-        """
         bitNo = 8
         byte = 0
         r = []
@@ -1039,13 +1063,6 @@ class OctetString(base.AbstractSimpleAsn1Item):
 
     @staticmethod
     def fromHexString(value):
-        """Create a |ASN.1| object initialized from the hex string.
-
-        Parameters
-        ----------
-        value: :class:`str`
-            Text string like 'DEADBEEF'
-        """
         r = []
         p = []
         for v in value:
@@ -1069,12 +1086,12 @@ class OctetString(base.AbstractSimpleAsn1Item):
                     break
             if not doHex:
                 r.append('%r' % (self._value,))
-        if self.tagSet is not self.__class__.tagSet:
-            r.append('tagSet=%r' % (self.tagSet,))
-        if self.subtypeSpec is not self.__class__.subtypeSpec:
-            r.append('subtypeSpec=%r' % (self.subtypeSpec,))
-        if self.encoding is not self.__class__.encoding:
-            r.append('encoding=%r' % (self.encoding,))
+        if self._tagSet is not self.tagSet:
+            r.append('tagSet=%r' % (self._tagSet,))
+        if self._subtypeSpec is not self.subtypeSpec:
+            r.append('subtypeSpec=%r' % (self._subtypeSpec,))
+        if self.encoding is not self._encoding:
+            r.append('encoding=%r' % (self._encoding,))
         if doHex:
             r.append('hexValue=%r' % ''.join(['%.2x' % x for x in self.asNumbers()]))
         return '%s(%s)' % (self.__class__.__name__, ', '.join(r))
@@ -1082,11 +1099,13 @@ class OctetString(base.AbstractSimpleAsn1Item):
     # Immutable sequence object protocol
 
     def __len__(self):
-        return len(self._value)
+        if self._len is None:
+            self._len = len(self._value)
+        return self._len
 
     def __getitem__(self, i):
-        if i.__class__ is slice:
-            return self.clone(self._value[i])
+        if isinstance(i, slice):
+            return self.clone(operator.getitem(self._value, i))
         else:
             return self._value[i]
 
@@ -1138,18 +1157,15 @@ class Null(OctetString):
     """
     defaultValue = ''.encode()  # This is tightly constrained
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for ASN.1
+    #: *Null* objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatSimple, 0x05)
     )
+    baseTagSet = tagSet
     subtypeSpec = OctetString.subtypeSpec + constraint.SingleValueConstraint(octets.str2octs(''))
 
-    # Optimization for faster codec lookup
-    typeId = OctetString.getTypeId()
-
-    def clone(self, value=noValue, **kwargs):
+    def clone(self, value=noValue, tagSet=None):
         """Create a copy of a |ASN.1| type or object.
 
         Any parameters to the *clone()* method will replace corresponding
@@ -1169,9 +1185,9 @@ class Null(OctetString):
         : :py:class:`~pyasn1.type.univ.Null`
             new instance of NULL type/value
         """
-        return OctetString.clone(self, value, **kwargs)
+        return OctetString.clone(self, value, tagSet)
 
-    def subtype(self, value=noValue, **kwargs):
+    def subtype(self, value=noValue, implicitTag=None, explicitTag=None):
         """Create a copy of a |ASN.1| type or object.
 
         Any parameters to the *subtype()* method will be added to the corresponding
@@ -1198,7 +1214,7 @@ class Null(OctetString):
         : :py:class:`~pyasn1.type.univ.Null`
             new instance of NULL type/value
         """
-        return OctetString.subtype(self, value, **kwargs)
+        return OctetString.subtype(self, value, implicitTag, explicitTag)
 
 
 if sys.version_info[0] <= 2:
@@ -1230,20 +1246,16 @@ class ObjectIdentifier(base.AbstractSimpleAsn1Item):
     : :py:class:`pyasn1.error.PyAsn1Error`
         On constraint violation or bad initializer.
     """
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for ASN.1
+    #: *ObjectIdentifier* objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatSimple, 0x06)
     )
+    baseTagSet = tagSet
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on initialization values.
     subtypeSpec = constraint.ConstraintsIntersection()
-
-    # Optimization for faster codec lookup
-    typeId = base.AbstractSimpleAsn1Item.getTypeId()
 
     def __add__(self, other):
         return self.clone(self._value + other)
@@ -1257,11 +1269,15 @@ class ObjectIdentifier(base.AbstractSimpleAsn1Item):
     # Sequence object protocol
 
     def __len__(self):
-        return len(self._value)
+        if self._len is None:
+            self._len = len(self._value)
+        return self._len
 
     def __getitem__(self, i):
-        if i.__class__ is slice:
-            return self.clone(self._value[i])
+        if isinstance(i, slice):
+            return self.clone(
+                operator.getitem(self._value, i)
+            )
         else:
             return self._value[i]
 
@@ -1368,22 +1384,18 @@ class Real(base.AbstractSimpleAsn1Item):
         _plusInf = _minusInf = None
         _inf = ()
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for ASN.1
+    #: *Real* objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatSimple, 0x09)
     )
+    baseTagSet = tagSet
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on initialization values.
     subtypeSpec = constraint.ConstraintsIntersection()
 
-    # Optimization for faster codec lookup
-    typeId = base.AbstractSimpleAsn1Item.getTypeId()
-
-    def clone(self, value=noValue, **kwargs):
+    def clone(self, value=noValue, tagSet=None, subtypeSpec=None):
         """Create a copy of a |ASN.1| type or object.
 
         Any parameters to the *clone()* method will replace corresponding
@@ -1406,9 +1418,10 @@ class Real(base.AbstractSimpleAsn1Item):
         :
             new instance of |ASN.1| type/value
         """
-        return base.AbstractSimpleAsn1Item.clone(self, value, **kwargs)
+        return base.AbstractSimpleAsn1Item.clone(self, value, tagSet, subtypeSpec)
 
-    def subtype(self, value=noValue, **kwargs):
+    def subtype(self, value=noValue, implicitTag=None, explicitTag=None,
+                subtypeSpec=None):
         """Create a copy of a |ASN.1| type or object.
 
         Any parameters to the *subtype()* method will be added to the corresponding
@@ -1438,7 +1451,7 @@ class Real(base.AbstractSimpleAsn1Item):
         :
             new instance of |ASN.1| type/value
         """
-        return base.AbstractSimpleAsn1Item.subtype(self, value, **kwargs)
+        return base.AbstractSimpleAsn1Item.subtype(self, value, implicitTag, explicitTag)
 
     @staticmethod
     def __normalizeBase10(value):
@@ -1495,13 +1508,12 @@ class Real(base.AbstractSimpleAsn1Item):
             return str(value)
 
     def prettyPrint(self, scope=0):
-        if self.isInf:
+        if self.isInfinity():
             return self.prettyOut(self._value)
         else:
             return str(float(self))
 
-    @property
-    def isPlusInf(self):
+    def isPlusInfinity(self):
         """Indicate PLUS-INFINITY object value
 
         Returns
@@ -1513,8 +1525,7 @@ class Real(base.AbstractSimpleAsn1Item):
         """
         return self._value == self._plusInf
 
-    @property
-    def isMinusInf(self):
+    def isMinusInfinity(self):
         """Indicate MINUS-INFINITY object value
 
         Returns
@@ -1525,8 +1536,7 @@ class Real(base.AbstractSimpleAsn1Item):
         """
         return self._value == self._minusInf
 
-    @property
-    def isInf(self):
+    def isInfinity(self):
         return self._value in self._inf
 
     def __str__(self):
@@ -1585,8 +1595,7 @@ class Real(base.AbstractSimpleAsn1Item):
         return int(float(self))
 
     if sys.version_info[0] <= 2:
-        def __long__(self):
-            return long(float(self))
+        def __long__(self): return long(float(self))
 
     def __float__(self):
         if self._value in self._inf:
@@ -1619,8 +1628,7 @@ class Real(base.AbstractSimpleAsn1Item):
         return self.clone(math.ceil(float(self)))
 
     if sys.version_info[0:2] > (2, 5):
-        def __trunc__(self):
-            return self.clone(math.trunc(float(self)))
+        def __trunc__(self): return self.clone(math.trunc(float(self)))
 
     def __lt__(self, value):
         return float(self) < value
@@ -1655,40 +1663,23 @@ class Real(base.AbstractSimpleAsn1Item):
         else:
             return self._value[idx]
 
-    # compatibility stubs
-
-    def isPlusInfinity(self):
-        return self.isPlusInf
-
-    def isMinusInfinity(self):
-        return self.isMinusInf
-
-    def isInfinity(self):
-        return self.isInf
-
 
 class Enumerated(Integer):
     __doc__ = Integer.__doc__
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for |ASN.1| objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatSimple, 0x0A)
     )
+    baseTagSet = tagSet
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on initialization values.
     subtypeSpec = constraint.ConstraintsIntersection()
-
-    # Optimization for faster codec lookup
-    typeId = Integer.getTypeId()
 
     #: Default :py:class:`~pyasn1.type.namedval.NamedValues` object
     #: representing symbolic aliases for numbers
     namedValues = namedval.NamedValues()
-
 
 # "Structured" ASN.1 types
 
@@ -1712,21 +1703,11 @@ class SequenceOfAndSetOfBase(base.AbstractConstructedAsn1Item):
         Object representing collection size constraint
      """
 
-    def __init__(self, *args, **kwargs):
-        # support positional params for backward compatibility
-        if args:
-            for key, value in zip(('componentType', 'tagSet',
-                                   'subtypeSpec', 'sizeSpec'), args):
-                if key in kwargs:
-                    raise error.PyAsn1Error('Conflicting positional and keyword params!')
-                kwargs['componentType'] = value
-
-        base.AbstractConstructedAsn1Item.__init__(self, **kwargs)
-
     # Python list protocol
 
     def clear(self):
         self._componentValues = []
+        self._componentValuesSet = 0
 
     def append(self, value):
         self[len(self)] = value
@@ -1754,7 +1735,7 @@ class SequenceOfAndSetOfBase(base.AbstractConstructedAsn1Item):
 
     def _cloneComponentValues(self, myClone, cloneValueFlag):
         for idx, componentValue in enumerate(self._componentValues):
-            if componentValue is not noValue:
+            if componentValue is not None:
                 if isinstance(componentValue, base.AbstractConstructedAsn1Item):
                     myClone.setComponentByPosition(
                         idx, componentValue.clone(cloneValueFlag=cloneValueFlag)
@@ -1770,21 +1751,14 @@ class SequenceOfAndSetOfBase(base.AbstractConstructedAsn1Item):
         Parameters
         ----------
         idx : :class:`int`
-            Component index (zero-based). Must either refer to an existing
-            component or to N+1 component (if *componentType* is set). In the latter
-            case a new component type gets instantiated and appended to the |ASN.1|
-            sequence.
+            component index (zero-based)
 
         Returns
         -------
         : :py:class:`~pyasn1.type.base.PyAsn1Item`
             a pyasn1 object
         """
-        try:
-            return self._componentValues[idx]
-        except IndexError:
-            self.setComponentByPosition(idx)
-            return self._componentValues[idx]
+        return self._componentValues[idx]
 
     def setComponentByPosition(self, idx, value=noValue,
                                verifyConstraints=True,
@@ -1792,22 +1766,18 @@ class SequenceOfAndSetOfBase(base.AbstractConstructedAsn1Item):
                                matchConstraints=True):
         """Assign |ASN.1| type component by position.
 
-        Equivalent to Python sequence item assignment operation (e.g. `[]`)
-        or list.append() (when idx == len(self)).
+        Equivalent to Python sequence item assignment operation (e.g. `[]`).
 
         Parameters
         ----------
-        idx: :class:`int`
-            Component index (zero-based). Must either refer to existing
-            component or to N+1 component. In the latter case a new component
-            type gets instantiated (if *componentType* is set, or given ASN.1
-            object is taken otherwise) and appended to the |ASN.1| sequence.
+        idx : :class:`int`
+            component index (zero-based)
 
-        value: :class:`object` or :py:class:`~pyasn1.type.base.PyAsn1Item` derivative
-            A Python value to initialize |ASN.1| component with (if *componentType* is set)
-            or ASN.1 value object to assign to |ASN.1| component.
+        value : :class:`object` or :py:class:`~pyasn1.type.base.PyAsn1Item` derivative
+            A Python or pyasn1 object to assign or :py:class:`~pyasn1.type.univ.noValue`
+            object to instantiate component type.
 
-        verifyConstraints: :class:`bool`
+        verifyConstraints : :class:`bool`
              If `False`, skip constraints validation
 
         matchTags: :class:`bool`
@@ -1819,37 +1789,30 @@ class SequenceOfAndSetOfBase(base.AbstractConstructedAsn1Item):
         Returns
         -------
         self
-
-        Raises
-        ------
-        IndexError:
-            When idx > len(self)
         """
-        if value is None:  # backward compatibility
-            value = noValue
+        componentType = self._componentType
 
-        componentType = self.componentType
+        componentValuesLength = len(self._componentValues)
 
-        try:
-            currentValue = self._componentValues[idx]
-        except IndexError:
-            currentValue = noValue
+        if idx == componentValuesLength:
+            self._componentValues.append(None)
+        elif idx >= componentValuesLength:
+            self._componentValues.extend([None for x in range((idx - componentValuesLength + 1))])
 
-            if len(self._componentValues) < idx:
-                raise error.PyAsn1Error('Component index out of range')
-
-        if value is noValue:
-            if componentType is not None:
-                value = componentType.clone()
-            elif currentValue is noValue:
-                raise error.PyAsn1Error('Component type not defined')
+        if self.isNoValue(value):
+            if self._componentValues[idx] is None:
+                if componentType is None:
+                    raise error.PyAsn1Error('Component type not defined')
+                self._componentValues[idx] = componentType.clone()
+                self._componentValuesSet += 1
+            return self
         elif not isinstance(value, base.Asn1Item):
-            if componentType is not None and isinstance(componentType, base.AbstractSimpleAsn1Item):
+            if componentType is None:
+                raise error.PyAsn1Error('Component type not defined')
+            if isinstance(componentType, base.AbstractSimpleAsn1Item):
                 value = componentType.clone(value=value)
-            elif currentValue is not noValue and isinstance(currentValue, base.AbstractSimpleAsn1Item):
-                value = currentValue.clone(value=value)
             else:
-                raise error.PyAsn1Error('%s undefined component type' % componentType.__class__.__name__)
+                raise error.PyAsn1Error('%s instance value required' % componentType.__class__.__name__)
         elif componentType is not None:
             if self.strictConstraints:
                 if not componentType.isSameTypeWith(value, matchTags, matchConstraints):
@@ -1858,132 +1821,85 @@ class SequenceOfAndSetOfBase(base.AbstractConstructedAsn1Item):
                 if not componentType.isSuperTypeOf(value, matchTags, matchConstraints):
                     raise error.PyAsn1Error('Component value is tag-incompatible: %r vs %r' % (value, componentType))
 
-        if verifyConstraints and value.isValue:
-            try:
-                self.subtypeSpec(value, idx)
+        if verifyConstraints:
+            self._verifySubtypeSpec(value, idx)
 
-            except error.PyAsn1Error:
-                exType, exValue, exTb = sys.exc_info()
-                raise exType('%s at %s' % (exValue, self.__class__.__name__))
+        if self._componentValues[idx] is None:
+            self._componentValuesSet += 1
 
-        if currentValue is noValue:
-            self._componentValues.append(value)
-        else:
-            self._componentValues[idx] = value
+        self._componentValues[idx] = value
 
         return self
 
-    @property
-    def componentTagMap(self):
-        if self.componentType is not None:
-            return self.componentType.tagMap
+    def getComponentTagMap(self):
+        if self._componentType is not None:
+            return self._componentType.getTagMap()
 
     def prettyPrint(self, scope=0):
         scope += 1
-        representation = self.__class__.__name__ + ':\n'
-        for idx, componentValue in enumerate(self._componentValues):
-            representation += ' ' * scope
-            if (componentValue is noValue and
-                    self.componentType is not None):
-                representation += '<empty>'
+        r = self.__class__.__name__ + ':\n'
+        for idx in range(len(self._componentValues)):
+            r += ' ' * scope
+            if self._componentValues[idx] is None:
+                r += '<empty>'
             else:
-                representation += componentValue.prettyPrint(scope)
-        return representation
+                r = r + self._componentValues[idx].prettyPrint(scope)
+        return r
 
     def prettyPrintType(self, scope=0):
         scope += 1
-        representation = '%s -> %s {\n' % (self.tagSet, self.__class__.__name__)
-        if self.componentType is not None:
-            representation += ' ' * scope
-            representation += self.componentType.prettyPrintType(scope)
-        return representation + '\n' + ' ' * (scope - 1) + '}'
-
-
-    @property
-    def isValue(self):
-        """Indicate if |ASN.1| object represents ASN.1 type or ASN.1 value.
-
-        In other words, if *isValue* is `True`, then the ASN.1 object is
-        initialized.
-
-        For the purpose of this check, empty |ASN.1| object is considered
-        as initialized.
-
-        Returns
-        -------
-        : :class:`bool`
-            :class:`True` if object represents ASN.1 value and type,
-            :class:`False` if object represents just ASN.1 type.
-
-        Note
-        ----
-        There is an important distinction between PyASN1 type and value objects.
-        The PyASN1 type objects can only participate in ASN.1 type
-        operations (subtyping, comparison etc) and serve as a
-        blueprint for serialization codecs to resolve ambiguous types.
-
-        The PyASN1 value objects can additionally participate in most
-        of built-in Python operations.
-        """
-        for componentValue in self._componentValues:
-            if not componentValue.isValue:
-                return False
-
-        return True
+        r = '%s -> %s {\n' % (self.getTagSet(), self.__class__.__name__)
+        if self._componentType is not None:
+            r += ' ' * scope
+            r = r + self._componentType.prettyPrintType(scope)
+        return r + '\n' + ' ' * (scope - 1) + '}'
 
 
 class SequenceOf(SequenceOfAndSetOfBase):
     __doc__ = SequenceOfAndSetOfBase.__doc__
-
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for |ASN.1| objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatConstructed, 0x10)
     )
+    baseTagSet = tagSet
 
     #: Default :py:class:`~pyasn1.type.base.PyAsn1Item` derivative
     #: object representing ASN.1 type allowed within |ASN.1| type
     componentType = None
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on |ASN.1| objects
     subtypeSpec = constraint.ConstraintsIntersection()
 
     #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
     #: object imposing size constraint on |ASN.1| objects
     sizeSpec = constraint.ConstraintsIntersection()
 
-    # Disambiguation ASN.1 types identification
-    typeId = SequenceOfAndSetOfBase.getTypeId()
+    typeId = 1
 
 
 class SetOf(SequenceOfAndSetOfBase):
     __doc__ = SequenceOfAndSetOfBase.__doc__
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for |ASN.1| objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatConstructed, 0x11)
     )
+    baseTagSet = tagSet
 
     #: Default :py:class:`~pyasn1.type.base.PyAsn1Item` derivative
     #: object representing ASN.1 type allowed within |ASN.1| type
     componentType = None
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on |ASN.1| objects
     subtypeSpec = constraint.ConstraintsIntersection()
 
     #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
     #: object imposing size constraint on |ASN.1| objects
     sizeSpec = constraint.ConstraintsIntersection()
 
-    # Disambiguation ASN.1 types identification
-    typeId = SequenceOfAndSetOfBase.getTypeId()
+    typeId = 2
 
 
 class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
@@ -1993,7 +1909,7 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
 
     Parameters
     ----------
-    componentType: :py:class:`~pyasn1.type.namedtype.NamedType`
+    componentType : :py:class:`~pyasn1.type.namedtype.NamedType`
         Object holding named ASN.1 types allowed within this collection
 
     tagSet: :py:class:`~pyasn1.type.tag.TagSet`
@@ -2009,9 +1925,14 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
     #: object representing named ASN.1 types allowed within |ASN.1| type
     componentType = namedtype.NamedTypes()
 
-    def __init__(self, **kwargs):
-        base.AbstractConstructedAsn1Item.__init__(self, **kwargs)
-        self._componentTypeLen = len(self.componentType)
+    def __init__(self, componentType=None, tagSet=None,
+                 subtypeSpec=None, sizeSpec=None):
+        if componentType is None:
+            componentType = self.componentType
+        base.AbstractConstructedAsn1Item.__init__(
+            self, componentType, tagSet, subtypeSpec, sizeSpec
+        )
+        self._componentTypeLen = len(self._componentType)
 
     def __getitem__(self, idx):
         if octets.isStringType(idx):
@@ -2026,10 +1947,10 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
             base.AbstractConstructedAsn1Item.__setitem__(self, idx, value)
 
     def __contains__(self, key):
-        return key in self.componentType
+        return key in self._componentType
 
     def __iter__(self):
-        return iter(self.componentType)
+        return iter(self._componentType)
 
     # Python dict protocol
 
@@ -2038,11 +1959,11 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
             yield self[idx]
 
     def keys(self):
-        return iter(self.componentType)
+        return iter(self._componentType)
 
     def items(self):
         for idx in range(self._componentTypeLen):
-            yield self.componentType[idx].getName(), self[idx]
+            yield self._componentType[idx].getName(), self[idx]
 
     def update(self, *iterValue, **mappingValue):
         for k, v in iterValue:
@@ -2052,10 +1973,11 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
 
     def clear(self):
         self._componentValues = []
+        self._componentValuesSet = 0
 
     def _cloneComponentValues(self, myClone, cloneValueFlag):
         for idx, componentValue in enumerate(self._componentValues):
-            if componentValue is not noValue:
+            if componentValue is not None:
                 if isinstance(componentValue, base.AbstractConstructedAsn1Item):
                     myClone.setComponentByPosition(
                         idx, componentValue.clone(cloneValueFlag=cloneValueFlag)
@@ -2076,10 +1998,10 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
         Returns
         -------
         : :py:class:`~pyasn1.type.base.PyAsn1Item`
-            Instantiate |ASN.1| component type or return existing component value
+            a pyasn1 object
         """
         return self.getComponentByPosition(
-            self.componentType.getPositionByName(name)
+            self._componentType.getPositionByName(name)
         )
 
     def setComponentByName(self, name, value=noValue,
@@ -2092,12 +2014,11 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
 
         Parameters
         ----------
-        name: :class:`str`
+        name : :class:`str`
             |ASN.1| type component name
 
         value : :class:`object` or :py:class:`~pyasn1.type.base.PyAsn1Item` derivative
-            A Python value to initialize |ASN.1| component with (if *componentType* is set)
-            or ASN.1 value object to assign to |ASN.1| component.
+            A Python or pyasn1 object to assign
 
         verifyConstraints: :class:`bool`
              If `False`, skip constraints validation
@@ -2113,7 +2034,7 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
         self
         """
         return self.setComponentByPosition(
-            self.componentType.getPositionByName(name), value, verifyConstraints, matchTags, matchConstraints
+            self._componentType.getPositionByName(name), value, verifyConstraints, matchTags, matchConstraints
         )
 
     def getComponentByPosition(self, idx):
@@ -2124,9 +2045,7 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
         Parameters
         ----------
         idx : :class:`int`
-            Component index (zero-based). Must either refer to an existing
-            component or (if *componentType* is set) new ASN.1 type object gets
-            instantiated.
+            component index (zero-based)
 
         Returns
         -------
@@ -2134,14 +2053,11 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
             a PyASN1 object
         """
         try:
-            componentValue = self._componentValues[idx]
+            return self._componentValues[idx]
         except IndexError:
-            componentValue = noValue
-
-        if componentValue is noValue:
-            self.setComponentByPosition(idx)
-
-        return self._componentValues[idx]
+            if idx < self._componentTypeLen:
+                return
+            raise
 
     def setComponentByPosition(self, idx, value=noValue,
                                verifyConstraints=True,
@@ -2154,14 +2070,10 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
         Parameters
         ----------
         idx : :class:`int`
-            Component index (zero-based). Must either refer to existing
-            component (if *componentType* is set) or to N+1 component
-            otherwise. In the latter case a new component of given ASN.1
-            type gets instantiated and appended to |ASN.1| sequence.
+            |ASN.1| type component index (zero-based)
 
         value : :class:`object` or :py:class:`~pyasn1.type.base.PyAsn1Item` derivative
-            A Python value to initialize |ASN.1| component with (if *componentType* is set)
-            or ASN.1 value object to assign to |ASN.1| component.
+            A Python or pyasn1 object to assign
 
         verifyConstraints : :class:`bool`
              If `False`, skip constraints validation
@@ -2176,106 +2088,83 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
         -------
         self
         """
-        if value is None:  # backward compatibility
-            value = noValue
-
-        componentType = self.componentType
-        componentTypeLen = self._componentTypeLen
-
-        try:
-            currentValue = self._componentValues[idx]
-        except IndexError:
-            currentValue = noValue
-            if componentTypeLen:
-                if componentTypeLen < idx:
-                    raise IndexError('component index out of range')
-                self._componentValues = [noValue] * componentTypeLen
-
-        if value is noValue:
-            if componentTypeLen:
-                value = componentType.getTypeByPosition(idx).clone()
-            elif currentValue is noValue:
-                raise error.PyAsn1Error('Component type not defined')
-        elif not isinstance(value, base.Asn1Item):
-            if componentTypeLen:
-                subComponentType = componentType.getTypeByPosition(idx)
-                if isinstance(subComponentType, base.AbstractSimpleAsn1Item):
-                    value = subComponentType.clone(value=value)
-                else:
-                    raise error.PyAsn1Error('%s can cast only scalar values' % componentType.__class__.__name__)
-            elif currentValue is not noValue and isinstance(currentValue, base.AbstractSimpleAsn1Item):
-                value = currentValue.clone(value=value)
-            else:
-                raise error.PyAsn1Error('%s undefined component type' % componentType.__class__.__name__)
-        elif (matchTags or matchConstraints) and componentTypeLen:
-            subComponentType = componentType.getTypeByPosition(idx)
-            if subComponentType is not noValue:
-                if self.strictConstraints:
-                    if not subComponentType.isSameTypeWith(value, matchTags, matchConstraints):
-                        raise error.PyAsn1Error('Component value is tag-incompatible: %r vs %r' % (value, componentType))
-                else:
-                    if not subComponentType.isSuperTypeOf(value, matchTags, matchConstraints):
-                        raise error.PyAsn1Error('Component value is tag-incompatible: %r vs %r' % (value, componentType))
-
-        if verifyConstraints and value.isValue:
-            try:
-                self.subtypeSpec(value, idx)
-
-            except error.PyAsn1Error:
-                exType, exValue, exTb = sys.exc_info()
-                raise exType('%s at %s' % (exValue, self.__class__.__name__))
-
-        if componentTypeLen:
-            self._componentValues[idx] = value
-        elif len(self._componentValues) == idx:
-            self._componentValues.append(value)
+        if self._componentType:
+            componentType = self._componentType.getTypeByPosition(idx)
         else:
-            raise error.PyAsn1Error('Component index out of range')
+            componentType = None
+
+        componentValuesLength = len(self._componentValues)
+
+        if idx == componentValuesLength:
+            self._componentValues.append(None)
+        elif idx > componentValuesLength:
+            self._componentValues.extend([None for x in range(idx - componentValuesLength + 1)])
+
+        if self.isNoValue(value):
+            if self._componentValues[idx] is None:
+                if componentType is None:
+                    raise error.PyAsn1Error('%s instance value required' % componentType.__class__.__name__)
+                self._componentValues[idx] = componentType.clone()
+                self._componentValuesSet += 1
+            return self
+        elif not isinstance(value, base.Asn1Item):
+            if componentType is None:
+                raise error.PyAsn1Error('Component type not defined')
+            if isinstance(componentType, base.AbstractSimpleAsn1Item):
+                value = componentType.clone(value=value)
+            else:
+                raise error.PyAsn1Error('%s instance value required' % componentType.__class__.__name__)
+        elif componentType is not None:
+            if self.strictConstraints:
+                if not componentType.isSameTypeWith(value, matchTags, matchConstraints):
+                    raise error.PyAsn1Error('Component value is tag-incompatible: %r vs %r' % (value, componentType))
+            else:
+                if not componentType.isSuperTypeOf(value, matchTags, matchConstraints):
+                    raise error.PyAsn1Error('Component value is tag-incompatible: %r vs %r' % (value, componentType))
+
+        if verifyConstraints:
+            self._verifySubtypeSpec(value, idx)
+
+        if self._componentValues[idx] is None:
+            self._componentValuesSet += 1
+
+        self._componentValues[idx] = value
 
         return self
 
-    @property
-    def isValue(self):
-        """Indicate if |ASN.1| object represents ASN.1 type or ASN.1 value.
+    def getNameByPosition(self, idx):
+        if self._componentTypeLen:
+            return self._componentType.getNameByPosition(idx)
 
-        In other words, if *isValue* is `True`, then the ASN.1 object is
-        initialized.
+    def getDefaultComponentByPosition(self, idx):
+        if self._componentTypeLen and self._componentType[idx].isDefaulted:
+            return self._componentType[idx].getType()
 
-        For the purpose of check, the *OPTIONAL* and *DEFAULT* fields are
-        unconditionally considered as initialized.
+    def getComponentType(self):
+        if self._componentTypeLen:
+            return self._componentType
+
+    def setDefaultComponents(self):
+        """Assign default values to all defaulted |ASN.1| type components.
 
         Returns
         -------
-        : :class:`bool`
-            :class:`True` if object represents ASN.1 value and type,
-            :class:`False` if object represents just ASN.1 type.
-
-        Note
-        ----
-        There is an important distinction between PyASN1 type and value objects.
-        The PyASN1 type objects can only participate in ASN.1 type
-        operations (subtyping, comparison etc) and serve as a
-        blueprint for serialization codecs to resolve ambiguous types.
-
-        The PyASN1 value objects can additionally participate in most
-        of built-in Python operations.
+        self
         """
-        componentType = self.componentType
-
-        if componentType:
-            for idx, subComponentType in enumerate(componentType.namedTypes):
-                if subComponentType.isDefaulted or subComponentType.isOptional:
-                    continue
-                if (not self._componentValues or
-                        not self._componentValues[idx].isValue):
-                    return False
-
-        else:
-            for componentValue in self._componentValues:
-                if not componentValue.isValue:
-                    return False
-
-        return True
+        if self._componentTypeLen == self._componentValuesSet:
+            return
+        idx = self._componentTypeLen
+        while idx:
+            idx -= 1
+            if self._componentType[idx].isDefaulted:
+                if self.getComponentByPosition(idx) is None:
+                    self.setComponentByPosition(idx)
+            elif not self._componentType[idx].isOptional:
+                if self.getComponentByPosition(idx) is None:
+                    raise error.PyAsn1Error(
+                        'Uninitialized component #%s at %r' % (idx, self)
+                    )
+        return self
 
     def prettyPrint(self, scope=0):
         """Return an object representation string.
@@ -2286,57 +2175,43 @@ class SequenceAndSetBase(base.AbstractConstructedAsn1Item):
             Human-friendly object representation.
         """
         scope += 1
-        representation = self.__class__.__name__ + ':\n'
-        for idx, componentValue in enumerate(self._componentValues):
-            if componentValue is not noValue:
-                representation += ' ' * scope
-                if self.componentType:
-                    representation += self.componentType.getNameByPosition(idx)
+        r = self.__class__.__name__ + ':\n'
+        for idx in range(len(self._componentValues)):
+            if self._componentValues[idx] is not None:
+                r += ' ' * scope
+                componentType = self.getComponentType()
+                if componentType is None:
+                    r += '<no-name>'
                 else:
-                    representation += 'field-%d' % idx
-                representation = '%s=%s\n' % (
-                    representation, componentValue.prettyPrint(scope)
+                    r = r + componentType.getNameByPosition(idx)
+                r = '%s=%s\n' % (
+                    r, self._componentValues[idx].prettyPrint(scope)
                 )
-        return representation
+        return r
 
     def prettyPrintType(self, scope=0):
         scope += 1
-        representation = '%s -> %s {\n' % (self.tagSet, self.__class__.__name__)
-        for idx, componentType in enumerate(self.componentType):
-            representation += ' ' * scope
-            representation += '"%s"' % self.componentType.getNameByPosition(idx)
-            representation = '%s = %s\n' % (
-                representation, componentType.prettyPrintType(scope)
+        r = '%s -> %s {\n' % (self.getTagSet(), self.__class__.__name__)
+        for idx in range(len(self.componentType)):
+            r += ' ' * scope
+            r += '"%s"' % self.componentType.getNameByPosition(idx)
+            r = '%s = %s\n' % (
+                r, self._componentType.getTypeByPosition(idx).prettyPrintType(scope)
             )
-        return representation + '\n' + ' ' * (scope - 1) + '}'
-
-    # backward compatibility
-
-    def setDefaultComponents(self):
-        return self
-
-    def getComponentType(self):
-        if self._componentTypeLen:
-            return self.componentType
-
-    def getNameByPosition(self, idx):
-        if self._componentTypeLen:
-            return self.componentType[idx].name
+        return r + '\n' + ' ' * (scope - 1) + '}'
 
 
 class Sequence(SequenceAndSetBase):
     __doc__ = SequenceAndSetBase.__doc__
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for |ASN.1| objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatConstructed, 0x10)
     )
+    baseTagSet = tagSet
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on |ASN.1| objects
     subtypeSpec = constraint.ConstraintsIntersection()
 
     #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
@@ -2347,18 +2222,15 @@ class Sequence(SequenceAndSetBase):
     #: object imposing size constraint on |ASN.1| objects
     componentType = namedtype.NamedTypes()
 
-    # Disambiguation ASN.1 types identification
-    typeId = SequenceAndSetBase.getTypeId()
-
-    # backward compatibility
+    typeId = 3
 
     def getComponentTagMapNearPosition(self, idx):
-        if self.componentType:
-            return self.componentType.getTagMapNearPosition(idx)
+        if self._componentType:
+            return self._componentType.getTagMapNearPosition(idx)
 
     def getComponentPositionNearType(self, tagSet, idx):
-        if self.componentType:
-            return self.componentType.getPositionNearType(tagSet, idx)
+        if self._componentType:
+            return self._componentType.getPositionNearType(tagSet, idx)
         else:
             return idx
 
@@ -2366,28 +2238,26 @@ class Sequence(SequenceAndSetBase):
 class Set(SequenceAndSetBase):
     __doc__ = SequenceAndSetBase.__doc__
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for ASN.1
+    #: *Set* objects
     tagSet = tag.initTagSet(
         tag.Tag(tag.tagClassUniversal, tag.tagFormatConstructed, 0x11)
     )
+    baseTagSet = tagSet
 
     #: Default collection of ASN.1 types of component (e.g. :py:class:`~pyasn1.type.namedtype.NamedType`)
     #: object representing ASN.1 type allowed within |ASN.1| type
     componentType = namedtype.NamedTypes()
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on |ASN.1| objects
     subtypeSpec = constraint.ConstraintsIntersection()
 
     #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
     #: object imposing constraints on |ASN.1| objects
     sizeSpec = constraint.ConstraintsIntersection()
 
-    # Disambiguation ASN.1 types identification
-    typeId = SequenceAndSetBase.getTypeId()
+    typeId = 4
 
     def getComponent(self, innerFlag=False):
         return self
@@ -2398,8 +2268,7 @@ class Set(SequenceAndSetBase):
         Parameters
         ----------
         tagSet : :py:class:`~pyasn1.type.tag.TagSet`
-            Object representing ASN.1 tags to identify one of
-            |ASN.1| object component
+            Object representing ASN.1 tags
 
         Returns
         -------
@@ -2407,7 +2276,7 @@ class Set(SequenceAndSetBase):
             a pyasn1 object
         """
         component = self.getComponentByPosition(
-            self.componentType.getPositionByType(tagSet)
+            self._componentType.getPositionByType(tagSet)
         )
         if innerFlag and isinstance(component, Set):
             # get inner component by inner tagSet
@@ -2426,12 +2295,10 @@ class Set(SequenceAndSetBase):
         Parameters
         ----------
         tagSet : :py:class:`~pyasn1.type.tag.TagSet`
-            Object representing ASN.1 tags to identify one of
-            |ASN.1| object component
+           Object representing ASN.1 tags
 
         value : :class:`object` or :py:class:`~pyasn1.type.base.PyAsn1Item` derivative
-            A Python value to initialize |ASN.1| component with (if *componentType* is set)
-            or ASN.1 value object to assign to |ASN.1| component.
+            A Python or pyasn1 object to assign
 
         verifyConstraints : :class:`bool`
             If `False`, skip constraints validation
@@ -2449,17 +2316,17 @@ class Set(SequenceAndSetBase):
         -------
         self
         """
-        idx = self.componentType.getPositionByType(tagSet)
+        idx = self._componentType.getPositionByType(tagSet)
+
+        componentType = self._componentType.getTypeByPosition(idx)
 
         if innerFlag:  # set inner component by inner tagSet
-            componentType = self.componentType.getTypeByPosition(idx)
-
-            if componentType.tagSet:
+            if componentType.getTagSet():
                 return self.setComponentByPosition(
                     idx, value, verifyConstraints, matchTags, matchConstraints
                 )
             else:
-                componentType = self.getComponentByPosition(idx)
+                componentType = self.setComponentByPosition(idx).getComponentByPosition(idx)
                 return componentType.setComponentByType(
                     tagSet, value, verifyConstraints, matchTags, matchConstraints, innerFlag=innerFlag
                 )
@@ -2468,27 +2335,28 @@ class Set(SequenceAndSetBase):
                 idx, value, verifyConstraints, matchTags, matchConstraints
             )
 
-    @property
-    def componentTagMap(self):
-        if self.componentType:
-            return self.componentType.tagMapUnique
+    def getComponentTagMap(self):
+        if self._componentType:
+            return self._componentType.getTagMap(True)
+
+    def getComponentPositionByType(self, tagSet):
+        if self._componentType:
+            return self._componentType.getPositionByType(tagSet)
 
 
 class Choice(Set):
     __doc__ = Set.__doc__
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for |ASN.1| objects (untagged by default)
     tagSet = tag.TagSet()  # untagged
+    baseTagSet = tagSet
 
     #: Default collection of ASN.1 types of component (e.g. :py:class:`~pyasn1.type.namedtype.NamedType`)
     #: object representing ASN.1 type allowed within |ASN.1| type
     componentType = namedtype.NamedTypes()
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing size constraint on |ASN.1| objects
     subtypeSpec = constraint.ConstraintsIntersection()
 
     #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
@@ -2497,8 +2365,7 @@ class Choice(Set):
         constraint.ValueSizeConstraint(1, 1)
     )
 
-    # Disambiguation ASN.1 types identification
-    typeId = Set.getTypeId()
+    typeId = 5
 
     _currentIdx = None
 
@@ -2534,10 +2401,10 @@ class Choice(Set):
 
     if sys.version_info[0] <= 2:
         def __nonzero__(self):
-            return self._componentValues and True or False
+            return bool(self._componentValues)
     else:
         def __bool__(self):
-            return self._componentValues and True or False
+            return bool(self._componentValues)
 
     def __len__(self):
         return self._currentIdx is not None and 1 or 0
@@ -2545,26 +2412,12 @@ class Choice(Set):
     def __contains__(self, key):
         if self._currentIdx is None:
             return False
-        return key == self.componentType[self._currentIdx].getName()
+        return key == self._componentType[self._currentIdx].getName()
 
     def __iter__(self):
         if self._currentIdx is None:
             raise StopIteration
-        yield self.componentType[self._currentIdx].getName()
-
-    # Python dict protocol
-
-    def values(self):
-        if self._currentIdx is not None:
-            yield self._componentValues[self._currentIdx]
-
-    def keys(self):
-        if self._currentIdx is not None:
-            yield self.componentType[self._currentIdx].getName()
-
-    def items(self):
-        if self._currentIdx is not None:
-            yield self.componentType[self._currentIdx].getName(), self[self._currentIdx]
+        yield self._componentType[self._currentIdx].getName()
 
     def verifySizeSpec(self):
         if self._currentIdx is None:
@@ -2572,28 +2425,20 @@ class Choice(Set):
 
     def _cloneComponentValues(self, myClone, cloneValueFlag):
         try:
-            component = self.getComponent()
+            c = self.getComponent()
         except error.PyAsn1Error:
             pass
         else:
-            if isinstance(component, Choice):
-                tagSet = component.effectiveTagSet
+            if isinstance(c, Choice):
+                tagSet = c.getEffectiveTagSet()
             else:
-                tagSet = component.tagSet
-            if isinstance(component, base.AbstractConstructedAsn1Item):
+                tagSet = c.getTagSet()
+            if isinstance(c, base.AbstractConstructedAsn1Item):
                 myClone.setComponentByType(
-                    tagSet, component.clone(cloneValueFlag=cloneValueFlag)
+                    tagSet, c.clone(cloneValueFlag=cloneValueFlag)
                 )
             else:
-                myClone.setComponentByType(tagSet, component.clone())
-
-    def getComponentByPosition(self, idx):
-        __doc__ = Set.__doc__
-
-        if self._currentIdx is None or self._currentIdx != idx:
-            return Set.getComponentByPosition(self, idx)
-
-        return self._componentValues[idx]
+                myClone.setComponentByType(tagSet, c.clone())
 
     def setComponentByPosition(self, idx, value=noValue,
                                verifyConstraints=True,
@@ -2605,16 +2450,11 @@ class Choice(Set):
 
         Parameters
         ----------
-        idx: :class:`int`
-            Component index (zero-based). Must either refer to existing
-            component or to N+1 component. In the latter case a new component
-            type gets instantiated (if *componentType* is set, or given ASN.1
-            object is taken otherwise) and appended to the |ASN.1| sequence.
+        idx : :class:`int`
+            component index (zero-based)
 
-        value: :class:`object` or :py:class:`~pyasn1.type.base.PyAsn1Item` derivative
-            A Python value to initialize |ASN.1| component with (if *componentType* is set)
-            or ASN.1 value object to assign to |ASN.1| component. Once a new value is
-            set to *idx* component, previous value is dropped.
+        value : :class:`object` or :py:class:`~pyasn1.type.base.PyAsn1Item` derivative
+            A Python or pyasn1 object to assign
 
         verifyConstraints : :class:`bool`
             If `False`, skip constraints validation
@@ -2629,38 +2469,63 @@ class Choice(Set):
         -------
         self
         """
-        oldIdx = self._currentIdx
-        Set.setComponentByPosition(self, idx, value, verifyConstraints, matchTags, matchConstraints)
+        componentType = self._componentType.getTypeByPosition(idx)
+
+        componentValuesLength = len(self._componentValues)
+
+        if idx == componentValuesLength:
+            self._componentValues.append(None)
+        elif idx > componentValuesLength:
+            self._componentValues.extend([None for x in range(idx - componentValuesLength + 1)])
+
+        if self._currentIdx is not None:
+            self._componentValues[self._currentIdx] = None
+
+        if self.isNoValue(value):
+            if self._componentValues[idx] is None:
+                self._componentValues[idx] = self._componentType.getTypeByPosition(idx).clone()
+                self._componentValuesSet = 1
+                self._currentIdx = idx
+            return self
+        elif not isinstance(value, base.Asn1Item):
+            value = self._componentType.getTypeByPosition(idx).clone(value=value)
+        elif self.strictConstraints:
+            if not componentType.isSameTypeWith(value, matchTags, matchConstraints):
+                raise error.PyAsn1Error('Component value is tag-incompatible: %r vs %r' % (value, componentType))
+        else:
+            if not componentType.isSuperTypeOf(value, matchTags, matchConstraints):
+                raise error.PyAsn1Error('Component value is tag-incompatible: %r vs %r' % (value, componentType))
+
+        if verifyConstraints:
+            self._verifySubtypeSpec(value, idx)
+
+        self._componentValues[idx] = value
         self._currentIdx = idx
-        if oldIdx is not None and oldIdx != idx:
-            self._componentValues[oldIdx] = None
+        self._componentValuesSet = 1
+
         return self
 
-    @property
-    def minTagSet(self):
-        if self.tagSet:
-            return self.tagSet
+    def getMinTagSet(self):
+        if self._tagSet:
+            return self._tagSet
         else:
-            return self.componentType.minTagSet
+            return self._componentType.genMinTagSet()
 
-    @property
-    def effectiveTagSet(self):
-        """Return a :class:`~pyasn1.type.tag.TagSet` object of the currently initialized component or self (if |ASN.1| is tagged)."""
-        if self.tagSet:
-            return self.tagSet
+    def getEffectiveTagSet(self):
+        if self._tagSet:
+            return self._tagSet
         else:
-            component = self.getComponent()
-            return component.effectiveTagSet
+            c = self.getComponent()
+            if isinstance(c, Choice):
+                return c.getEffectiveTagSet()
+            else:
+                return c.getTagSet()
 
-    @property
-    def tagMap(self):
-        """"Return a :class:`~pyasn1.type.tagmap.TagMap` object mapping
-            ASN.1 tags to ASN.1 objects contained within callee.
-        """
-        if self.tagSet:
-            return Set.tagMap.fget(self)
+    def getTagMap(self):
+        if self._tagSet:
+            return Set.getTagMap(self)
         else:
-            return self.componentType.tagMapUnique
+            return Set.getComponentTagMap(self)
 
     def getComponent(self, innerFlag=0):
         """Return currently assigned component of the |ASN.1| object.
@@ -2694,68 +2559,30 @@ class Choice(Set):
                 c = self._componentValues[self._currentIdx]
                 if isinstance(c, Choice):
                     return c.getName(innerFlag)
-            return self.componentType.getNameByPosition(self._currentIdx)
+            return self._componentType.getNameByPosition(self._currentIdx)
 
-    @property
-    def isValue(self):
-        """Indicate if |ASN.1| component is set and represents ASN.1 type or ASN.1 value.
-
-        The PyASN1 type objects can only participate in types comparison
-        and serve as a blueprint for serialization codecs to resolve
-        ambiguous types.
-
-        The PyASN1 value objects can additionally participate in most
-        of built-in Python operations.
-
-        Returns
-        -------
-        : :class:`bool`
-            :class:`True` if |ASN.1| component is set and represent value and type,
-            :class:`False` if |ASN.1| component is not set or it represents just ASN.1 type.
-        """
-        if self._currentIdx is None:
-            return False
-
-        return self._componentValues[self._currentIdx].isValue
-
-    # compatibility stubs
-
-    def getMinTagSet(self):
-        return self.minTagSet
+    def setDefaultComponents(self):
+        pass
 
 
 class Any(OctetString):
     __doc__ = OctetString.__doc__
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.tag.TagSet` object representing ASN.1 tag(s)
-    #: associated with |ASN.1| type.
+    #: Default :py:class:`~pyasn1.type.tag.TagSet` object for |ASN.1| objects (untagged by default)
     tagSet = tag.TagSet()  # untagged
+    baseTagSet = tagSet
+    typeId = 6
 
-    #: Set (on class, not on instance) or return a
-    #: :py:class:`~pyasn1.type.constraint.ConstraintsIntersection` object
-    #: imposing constraints on |ASN.1| type initialization values.
+    #: Default :py:class:`~pyasn1.type.constraint.ConstraintsIntersection`
+    #: object imposing constraints on initialization values.
     subtypeSpec = constraint.ConstraintsIntersection()
 
-    # Disambiguation ASN.1 types identification
-    typeId = OctetString.getTypeId()
-
-    @property
-    def tagMap(self):
-        """"Return a :class:`~pyasn1.type.tagmap.TagMap` object mapping
-            ASN.1 tags to ASN.1 objects contained within callee.
-        """
-        try:
-            return self._tagMap
-
-        except AttributeError:
-            self._tagMap = tagmap.TagMap(
-                {self.tagSet: self},
-                {eoo.endOfOctets.tagSet: eoo.endOfOctets},
-                self
-            )
-
-            return self._tagMap
+    def getTagMap(self):
+        return tagmap.TagMap(
+            {self.getTagSet(): self},
+            {eoo.endOfOctets.getTagSet(): eoo.endOfOctets},
+            self
+        )
 
 # XXX
 # coercion rules?
