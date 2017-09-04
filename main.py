@@ -1,13 +1,12 @@
 """ Import required libraries """
 import os
 import json
-import tempfile
 
 from google.oauth2 import service_account
 from apiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
-CREDENTIALS_FILENAME = 'credentials.json'
+CREDENTIALS_PATH = '/tmp/credentials.json'
 
 
 def give_permissions_to_file(service, file_id, email_list, domain_list):
@@ -58,27 +57,12 @@ def get_credentials(credentials):
         library only accepts a file path.
     """
 
-    tmpdir = tempfile.mkdtemp()
-    saved_umask = os.umask(0077)
+    credentials_path = '/tmp/credentials.json'
+    with open(credentials_path, "w") as credentials_file:
+        credentials_file.write(credentials)
 
-    _cred = None
-
-    path = os.path.join(tmpdir, CREDENTIALS_FILENAME)
-
-    try:
-        with open(path, "w") as tmp:
-            tmp.write(json.loads(credentials))
-
-        _cred = service_account.Credentials.from_service_account_file(path)
-    except IOError:
-        print 'IOError'
-    else:
-        os.remove(path)
-    finally:
-        os.umask(saved_umask)
-        os.rmdir(tmpdir)
-
-    return _cred
+    return service_account.Credentials.from_service_account_file(
+        credentials_path)
 
 
 def main(title, folder_id, mime_type, service_account_json, domain_list=[], email_list=[]):
@@ -102,6 +86,7 @@ def main(title, folder_id, mime_type, service_account_json, domain_list=[], emai
     if folder_id:
         meta_data['parents'] = [folder_id]
 
+
     req = service.files().create(body=meta_data)
     file = req.execute()
 
@@ -110,5 +95,7 @@ def main(title, folder_id, mime_type, service_account_json, domain_list=[], emai
         file_id=file.get("id"),
         domain_list=domain_list,
         email_list=email_list)
+
+    os.remove(CREDENTIALS_PATH)
 
     return file
