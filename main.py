@@ -66,15 +66,15 @@ def get_credentials(credentials):
     return credentials
 
 
- def main(title, folder_id, mime_type, service_account_json, domain_list=[], email_list=[]):
+ def main(title, folder_id, mime_type, service_account_json, domain_list="", email_list=""):
     """ Create a google spreadsheet """
 
     credentials = get_credentials(service_account_json)
 
-    if len(email_list):
+    if email_list:
         email_list = json.loads(email_list)
 
-    if len(domain_list):
+    if domain_list:
         domain_list = json.loads(domain_list)
 
     service = build('drive', 'v3', credentials=credentials)
