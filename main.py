@@ -1,7 +1,6 @@
 """ Import required libraries """
 import os
 import json
-import tempfile
 
 from oauth2client.service_account import ServiceAccountCredentials
 from apiclient.discovery import build
@@ -66,7 +65,7 @@ def get_credentials(credentials):
     return credentials
 
 
- def main(title, folder_id, mime_type, service_account_json, domain_list="", email_list=""):
+def main(title, folder_id, mime_type, service_account_json, domain_list="", email_list=""):
     """ Create a google spreadsheet """
 
     credentials = get_credentials(service_account_json)
@@ -86,7 +85,6 @@ def get_credentials(credentials):
 
     if folder_id:
         meta_data['parents'] = [folder_id]
-
 
     req = service.files().create(body=meta_data)
     file = req.execute()
