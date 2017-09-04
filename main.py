@@ -57,12 +57,11 @@ def get_credentials(credentials):
         library only accepts a file path.
     """
 
-    credentials_path = '/tmp/credentials.json'
-    with open(credentials_path, "w") as credentials_file:
+    with open(CREDENTIALS_PATH, "w") as credentials_file:
         credentials_file.write(credentials)
 
     return service_account.Credentials.from_service_account_file(
-        credentials_path)
+        CREDENTIALS_PATH)
 
 
 def main(title, folder_id, mime_type, service_account_json, domain_list=[], email_list=[]):
