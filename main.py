@@ -57,11 +57,27 @@ def get_credentials(credentials):
         library only accepts a file path.
     """
 
-    with open(CREDENTIALS_PATH, "w") as credentials_file:
-        credentials_file.write(credentials)
+    tmpdir = tempfile.mkdtemp()
+    saved_umask = os.umask(0077)
 
-    return service_account.Credentials.from_service_account_file(
-        CREDENTIALS_PATH)
+    _cred = None
+
+    path = os.path.join(tmpdir, CREDENTIALS_FILENAME)
+
+    try:
+        with open(path, "w") as tmp:
+            tmp.write(json.loads(credentials))
+
+        _cred = service_account.Credentials.from_service_account_file(path)
+    except IOError:
+        print 'IOError'
+    else:
+        os.remove(path)
+    finally:
+        os.umask(saved_umask)
+        os.rmdir(tmpdir)
+
+    return _cred
 
 
 def main(title, folder_id, mime_type, service_account_json, domain_list=[], email_list=[]):
