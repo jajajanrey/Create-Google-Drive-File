@@ -1,13 +1,17 @@
 """ Import required libraries """
 import os
 import json
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2 import service_account
 from apiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
+CREDENTIALS_PATH = '/tmp/credentials.json'
 
 
 def give_permissions_to_file(service, file_id, email_list, domain_list):
+    """
+        Give permission to list of domain, or to list of email
+    """
     permissions = None
 
     if domain_list and isinstance(domain_list, list):
@@ -46,24 +50,25 @@ def give_permissions_to_file(service, file_id, email_list, domain_list):
             req.execute()
 
 
+def get_credentials(credentials):
+    """
+        We have to write it to a file because gcs
+        library only accepts a file path.
+    """
+    with open(credentials_path, "w") as credentials_file:
+        credentials_file.write(credentials)
+
+    return service_account.Credentials.from_service_account_file(
+        CREDENTIALS_PATH, SCOPES)
+
+
 def main(title, folder_id, mime_type, domain_list, email_list, service_account_json):
     """ Create a google spreadsheet """
 
-    # We have to write it to a file because
-    # gcs library only accepts a file path.
-    # Rewrite. Must not use /tmp because it is re-used
-
-    credentials_path = '/tmp/credentials.json'
-    with open(credentials_path, "w") as credentials_file:
-        credentials_file.write(service_account_json)
-
-    credentials_file.close()
-    credentials = ServiceAccountCredentials.from_json_keyfile_name(
-        credentials_path, SCOPES)
+    credentials = get_credentials(service_account_json)
 
     email_list = json.loads(email_list)
     domain_list = json.loads(domain_list)
-
 
     service = build('drive', 'v3', credentials=credentials)
 
@@ -78,10 +83,7 @@ def main(title, folder_id, mime_type, domain_list, email_list, service_account_j
     req = service.files().create(body=meta_data)
     file = req.execute()
 
-    os.remove(credentials_path)
-
-    response = {}
-    response["type"] = "error"
+    os.remove(CREDENTIALS_PATH)
 
     give_permissions_to_file(
         service=service,
